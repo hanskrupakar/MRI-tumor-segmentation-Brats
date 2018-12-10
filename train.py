@@ -11,6 +11,7 @@ import keras
 import glob
 import Queue
 from threading import Thread # Thread OOMs out for some reason. Have to debug!!
+import time 
 
 def parse_inputs():
 
@@ -238,10 +239,8 @@ def train():
                                                               t1_t1ce_gt_node: label_batch[1],
                                                               })
             n_pos_sum = np.sum(np.reshape(label_batch[0], (-1, 2)), axis=0)
-        q[0].put(acc_ft)
-        q[1].put(acc_t1c)
-        q[2].put(l)
-        q[3].put(n_pos_sum)
+        
+        return acc_ft, acc_t1c, l, n_pos_sum
     
     with tf.Session() as sess:
         if continue_training:
@@ -254,8 +253,17 @@ def train():
                 data, labels, centers = data_gen_train.next()
                 n_batches = int(np.ceil(float(centers.shape[1]) / BATCH_SIZE))
                 threads = []
+
                 for nb in range(0, n_batches, len(options['gpu_ids'])):
                     for gi, x in enumerate(options['gpu_ids']):
+                        
+                        #t = time.time()
+                        
+                        acc_ft, acc_t1c, l, n_pos_sum = single_gpu_fn(nb+gi)
+                        acc_pi.append([acc_ft, acc_t1c])
+                        loss_pi.append(l)
+                        
+                        '''
                         q = [Queue.Queue() for _ in range(4)]
                         t = Thread(target=single_gpu_fn, args=(nb+gi,'/device:GPU:%d'%x, q))
                         threads.append(t)
@@ -268,8 +276,10 @@ def train():
                     
                     queue_avg = lambda x, i: np.average(list(x[i].queue))
                     acc_ft, acc_t1c, l, n_pos_sum = queue_avg(q, 0), queue_avg(q, 1), queue_avg(q, 2), np.mean(list(q[3].queue), axis=0)
-                    acc_pi.append([acc_ft, acc_t1c])
-                    loss_pi.append(l)
+                    '''
+                    
+                    #print ('TIME: %.4f'%(time.time()-t))
+                    
                     print 'epoch-patient: %d, %d, iter: %d-%d, p%%: %.4f, loss: %.4f, acc_flair_t2: %.2f%%, acc_t1_t1ce: %.2f%%' % \
                           (ei + 1, pi + 1, nb + 1, n_batches, n_pos_sum[1]/float(np.sum(n_pos_sum)), l, acc_ft, acc_t1c)
 
