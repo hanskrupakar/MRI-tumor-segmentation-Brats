@@ -1,5 +1,5 @@
 import tensorflow as tf
-from tensorflow.contrib.keras.python.keras.layers import Conv3D, MaxPooling3D, UpSampling3D, Activation, Conv3DTranspose
+from tensorflow.keras.layers import Conv3D, MaxPooling3D, UpSampling3D, Activation, Conv3DTranspose
 from tf_layers import *
 
 
