@@ -2,19 +2,22 @@ import numpy as np
 import tf_models
 from sklearn.preprocessing import scale
 import tensorflow as tf
-from tensorflow.contrib.keras.python.keras.backend import learning_phase
-from tensorflow.contrib.keras.python.keras.layers import concatenate, Conv3D
+from tensorflow.keras.backend import learning_phase
+from tensorflow.keras.layers import concatenate, Conv3D
 from nibabel import load as load_nii
 import os
 import argparse
 import keras
-
+import glob
+import Queue
+from threading import Thread # Thread OOMs out for some reason. Have to debug!!
 
 def parse_inputs():
 
     parser = argparse.ArgumentParser(description='train the model')
     parser.add_argument('-r', '--root-path', dest='root_path', default='/media/lele/Data/spie/Brats17TrainingData/HGG')
     parser.add_argument('-sp', '--save-path', dest='save_path', default='dense24_correction')
+    parser.add_argument('-ng', '--gpu-ids', dest='gpu_ids', default=[0], nargs='+', type=int)
     parser.add_argument('-lp', '--load-path', dest='load_path', default='dense24_correction')
     parser.add_argument('-ow', '--offset-width', dest='offset_w', type=int, default=12)
     parser.add_argument('-oh', '--offset-height', dest='offset_h', type=int, default=12)
@@ -28,12 +31,10 @@ def parse_inputs():
     parser.add_argument('-c', '--continue-training', dest='continue_training', type=bool, default=False)
     parser.add_argument('-mn', '--model_name', dest='model_name', type=str, default='dense24')
     parser.add_argument('-nc', '--n4correction', dest='correction', type=bool, default=False)
-    parser.add_argument('-gpu', '--gpu_id', dest='gpu_id', type=str, default='0')
     return vars(parser.parse_args())
 
 options = parse_inputs()
 
-os.environ["CUDA_VISIBLE_DEVICES"] = options['gpu_id']
 def acc_tf(y_pred, y_true):
     correct_prediction = tf.equal(tf.cast(tf.argmax(y_pred, -1), tf.int32), tf.cast(tf.argmax(y_true, -1), tf.int32))
     return 100 * tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
@@ -114,21 +115,24 @@ def dice_coef_np(y_true, y_pred, num_classes):
     return (2. * intersection) / (np.sum(y_true, axis=0) + np.sum(y_pred, axis=0))
 
 
-def vox_generator(all_files, n_pos, n_neg,correction= False):
+def vox_generator(all_files, n_pos, n_neg):
     path = options['root_path']
     while 1:
         for file in all_files:
-            if correction:
-                flair = load_nii(os.path.join(path, file, file + '_flair_corrected.nii.gz')).get_data()
-                t2 = load_nii(os.path.join(path, file, file + '_t2_corrected.nii.gz')).get_data()
-                t1 = load_nii(os.path.join(path, file, file + '_t1_corrected.nii.gz')).get_data()
-                t1ce = load_nii(os.path.join(path, file, file + '_t1ce_corrected.nii.gz')).get_data()
-            else:
-
-                flair = load_nii(os.path.join(path, file, file + '_flair.nii.gz')).get_data()
-                t2 = load_nii(os.path.join(path, file, file + '_t2.nii.gz')).get_data()
-                t1 = load_nii(os.path.join(path, file, file + '_t1.nii.gz')).get_data()
-                t1ce = load_nii(os.path.join(path, file, file + '_t1ce.nii.gz')).get_data()
+            coll = glob.glob(os.path.join(path, file)+'/*')
+            for c in coll:
+                if 'flair.' in c or 'flair_corrected.' in c:
+                    flair_path = c
+                if 't1.' in c or 't1_corrected.' in c:
+                    t1_path = c 
+                if 't2.' in c or 't2_corrected.' in c:
+                    t2_path = c
+                if 't1ce.'in c or 't1ce_corrected.' in c:
+                    t1ce_path = c
+            flair = load_nii(flair_path).get_data()
+            t2 = load_nii(t2_path).get_data()
+            t1 = load_nii(t1_path).get_data()
+            t1ce = load_nii(t1ce_path).get_data()
 
             data_norm = np.array([norm(flair), norm(t2), norm(t1), norm(t1ce)])
             data_norm = np.transpose(data_norm, axes=[1, 2, 3, 0])
@@ -155,7 +159,6 @@ def label_transform(y, nlabels):
             keras.utils.to_categorical(y,
                                        num_classes=nlabels).reshape([y.shape[0], y.shape[1], y.shape[2], y.shape[3], nlabels])
             ]
-
 
 def train():
     NUM_EPOCHS = options['num_epochs']
@@ -221,8 +224,25 @@ def train():
         optimizer = tf.train.AdamOptimizer(learning_rate=5e-4).minimize(loss)
 
     saver = tf.train.Saver(max_to_keep=15)
-    data_gen_train = vox_generator(all_files=files, n_pos=200, n_neg=200,correction = options['correction'])
-
+    data_gen_train = vox_generator(all_files=files, n_pos=200, n_neg=200)
+    
+    def single_gpu_fn(nb, gpuname='/device:GPU:0', q=None): # q - result queue
+        with tf.device(gpuname):
+            offset_batch = min(nb * BATCH_SIZE, centers.shape[1] - BATCH_SIZE)
+            data_batch, label_batch = get_patches_3d(data, labels, centers[:, offset_batch:offset_batch + BATCH_SIZE], HSIZE, WSIZE, CSIZE, PSIZE, False)
+            label_batch = label_transform(label_batch, 5)
+            _, l, acc_ft, acc_t1c = sess.run(fetches=[optimizer, loss, acc_flair_t2, acc_t1_t1ce],
+                                                   feed_dict={flair_t2_node: data_batch[:, :, :, :, :2],
+                                                              t1_t1ce_node: data_batch[:, :, :, :, 2:],
+                                                              flair_t2_gt_node: label_batch[0],
+                                                              t1_t1ce_gt_node: label_batch[1],
+                                                              })
+            n_pos_sum = np.sum(np.reshape(label_batch[0], (-1, 2)), axis=0)
+        q[0].put(acc_ft)
+        q[1].put(acc_t1c)
+        q[2].put(l)
+        q[3].put(n_pos_sum)
+    
     with tf.Session() as sess:
         if continue_training:
             saver.restore(sess, LOAD_PATH)
@@ -233,19 +253,23 @@ def train():
                 acc_pi, loss_pi = [], []
                 data, labels, centers = data_gen_train.next()
                 n_batches = int(np.ceil(float(centers.shape[1]) / BATCH_SIZE))
-                for nb in range(n_batches):
-                    offset_batch = min(nb * BATCH_SIZE, centers.shape[1] - BATCH_SIZE)
-                    data_batch, label_batch = get_patches_3d(data, labels, centers[:, offset_batch:offset_batch + BATCH_SIZE], HSIZE, WSIZE, CSIZE, PSIZE, False)
-                    label_batch = label_transform(label_batch, 5)
-                    _, l, acc_ft, acc_t1c = sess.run(fetches=[optimizer, loss, acc_flair_t2, acc_t1_t1ce],
-                                                   feed_dict={flair_t2_node: data_batch[:, :, :, :, :2],
-                                                              t1_t1ce_node: data_batch[:, :, :, :, 2:],
-                                                              flair_t2_gt_node: label_batch[0],
-                                                              t1_t1ce_gt_node: label_batch[1],
-                                                              learning_phase(): 1})
+                threads = []
+                for nb in range(0, n_batches, len(options['gpu_ids'])):
+                    for gi, x in enumerate(options['gpu_ids']):
+                        q = [Queue.Queue() for _ in range(4)]
+                        t = Thread(target=single_gpu_fn, args=(nb+gi,'/device:GPU:%d'%x, q))
+                        threads.append(t)
+                    
+                    for th in threads:
+                        th.start()
+                    for th in threads:
+                        th.join()
+                    threads = []
+                    
+                    queue_avg = lambda x, i: np.average(list(x[i].queue))
+                    acc_ft, acc_t1c, l, n_pos_sum = queue_avg(q, 0), queue_avg(q, 1), queue_avg(q, 2), np.mean(list(q[3].queue), axis=0)
                     acc_pi.append([acc_ft, acc_t1c])
                     loss_pi.append(l)
-                    n_pos_sum = np.sum(np.reshape(label_batch[0], (-1, 2)), axis=0)
                     print 'epoch-patient: %d, %d, iter: %d-%d, p%%: %.4f, loss: %.4f, acc_flair_t2: %.2f%%, acc_t1_t1ce: %.2f%%' % \
                           (ei + 1, pi + 1, nb + 1, n_batches, n_pos_sum[1]/float(np.sum(n_pos_sum)), l, acc_ft, acc_t1c)
 
