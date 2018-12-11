@@ -12,6 +12,7 @@ import glob
 import Queue
 from threading import Thread # Thread OOMs out for some reason. Have to debug!!
 import time 
+from partition_brats_dir import get_dataset_dirnames
 
 def parse_inputs():
 
@@ -172,12 +173,11 @@ def train():
     model_name= options['model_name']
     BATCH_SIZE = options['batch_size']
     continue_training = options['continue_training']
+    lr = tf.Variable(5e-4, trainable=False)
 
     files = []
     num_labels = 5
-    with open('train.txt') as f:
-        for line in f:
-            files.append(line[:-1])
+    files = get_dataset_dirnames(options['root_path'])
     print '%d training samples' % len(files)
 
     flair_t2_node = tf.placeholder(dtype=tf.float32, shape=(None, HSIZE, WSIZE, CSIZE, 2))
@@ -222,7 +222,7 @@ def train():
 
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        optimizer = tf.train.AdamOptimizer(learning_rate=5e-4).minimize(loss)
+        optimizer = tf.train.AdamOptimizer(learning_rate=lr).minimize(loss)
 
     saver = tf.train.Saver(max_to_keep=15)
     data_gen_train = vox_generator(all_files=files, n_pos=200, n_neg=200)
@@ -241,6 +241,14 @@ def train():
             n_pos_sum = np.sum(np.reshape(label_batch[0], (-1, 2)), axis=0)
         
         return acc_ft, acc_t1c, l, n_pos_sum
+    
+    if not os.path.isdir('chkpts'):
+        os.mkdir('chkpts')
+        os.mkdir('chkpts/0')
+        save_point = 0
+    else:
+        save_point = sorted([int(x.split('/')[-1]) for x in glob.glob('chkpts/*')])[-1] + 1
+        os.mkdir('chkpts/%d'%save_point)
     
     with tf.Session() as sess:
         if continue_training:
@@ -284,10 +292,12 @@ def train():
                           (ei + 1, pi + 1, nb + 1, n_batches, n_pos_sum[1]/float(np.sum(n_pos_sum)), l, acc_ft, acc_t1c)
 
                 print 'patient loss: %.4f, patient acc: %.4f' % (np.mean(loss_pi), np.mean(acc_pi))
+            
 
-            saver.save(sess, SAVE_PATH, global_step=ei)
+            saver.save(sess, 'chkpts/'+str(save_point)+'/'+SAVE_PATH+'.ckpt', global_step=ei)
             print 'model saved'
-
+            
+            lr = tf.train.exponential_decay(lr, ei, 1, 0.25, staircase=True)
 
 if __name__ == '__main__':
     

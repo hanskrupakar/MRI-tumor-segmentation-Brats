@@ -18,7 +18,7 @@ from nibabel import load as load_nii
 from sklearn.preprocessing import scale
 import matplotlib.pyplot as plt
 
-
+from partition_brats_dataset import get_dataset_dirnames
 
 # SAVE_PATH = 'unet3d_baseline.hdf5'
 # OFFSET_W = 16
@@ -195,10 +195,7 @@ def vox_generator_test(all_files):
 
 def main():
     test_files = []
-    with open('test.txt') as f:
-        for line in f:
-            test_files.append(line[:-1])
-
+    test_files = get_dataset_dirnames(args['root_dir'], 'test')
     num_labels = 5
     OFFSET_H = options['offset_h']
     OFFSET_W = options['offset_w']
