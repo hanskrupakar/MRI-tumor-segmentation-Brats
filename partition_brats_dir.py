@@ -23,5 +23,10 @@ if __name__=='__main__':
     ap.add_argument('--dir', required=True, help='Directory of nii.gz files to split into train, val and test sets')
     args = ap.parse_args()
     
-    print (get_dataset_dirnames(args.dir))
+    for part in ['train', 'val', 'test']:
+        fnames = get_dataset_dirnames(args.dir, part)
+
+        with open(part+'.txt', 'w') as f:
+            for fn in fnames:
+                f.write(fn+'\n')
     

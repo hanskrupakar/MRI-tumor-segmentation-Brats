@@ -104,21 +104,39 @@ class LogFile:
         ax.plot([i/self.num_steps_per_epoch  for i in range(len(self.steps))], t2flacc, label='T2, flair: %s'%fname.split('.txt')[0].split('log_')[-1])
         
         return fig, ax
+    
+    def plot_scatter(self, fig, ax, fname):
+        
+        x, y = [], []
+        cmap = plt.get_cmap('YlOrRd')
+        colors = [cmap(i) for i in np.linspace(0, 1, len(self.steps))]
 
-fig, ax = plt.subplots()
+        for step in self.steps:
+            x.append(step['prob_pos'])
+            y.append(step['loss'])
+
+        plt.scatter(x, y, c=colors, marker='+')
+
+#fig, ax = plt.subplots()
 
 for f in glob.glob("log_*.txt"):
     
     fobj = LogFile(f)
 
     print fobj.num_steps_per_epoch
+    
+    fig, ax = plt.subplots()
 
     #fig, ax = fobj.plot_accuracy_graph(fig, ax, f)
-    fig, ax = fobj.plot_loss_graph(fig, ax, f)
+    #fig, ax = fobj.plot_loss_graph(fig, ax, f)
+    fobj.plot_scatter(fig, ax, f)
     
-    #plt.savefig(f.split('.txt')[0]+'.png', bbox_inches='tight')
+    plt.xlabel('p(x==1)')
+    plt.ylabel('DICE Loss')
+    plt.title(f.split('.txt')[0])
+    plt.savefig(f.split('.txt')[0]+'.png', bbox_inches='tight')
 
-plt.legend(loc='best')
-plt.xlabel('Number of epochs')
+#plt.legend(loc='best')
+plt.xlabel('p(x==1)')
 plt.ylabel('DICE Loss')
-plt.savefig('loss.png', bbox_inches='tight')
+#plt.savefig('heatmap.png', bbox_inches='tight')

@@ -12,13 +12,13 @@ from keras.layers.pooling import AveragePooling3D
 from keras.layers import Input
 from keras.layers.merge import concatenate
 from keras.layers.normalization import BatchNormalization
-from tensorflow.contrib.keras.python.keras.backend import learning_phase
+from tensorflow.keras.backend import learning_phase
 
 from nibabel import load as load_nii
 from sklearn.preprocessing import scale
 import matplotlib.pyplot as plt
 
-
+import glob
 
 # SAVE_PATH = 'unet3d_baseline.hdf5'
 # OFFSET_W = 16
@@ -45,7 +45,7 @@ def parse_inputs():
     parser.add_argument('-gpu', '--gpu', dest='gpu', type=str, default='0')
     parser.add_argument('-mn', '--model_name', dest='model_name', type=str, default='dense24')
     parser.add_argument('-nc', '--correction', dest='correction', type=bool, default=True)
-    parser.add_argument('-sp', '--save_path', dest='save_path', type=str, default='/mnt/disk1/dat/lchen63/brain/data/result/')
+    parser.add_argument('-sp', '--save_path', dest='save_path', required=True, type=str)
 
 
     return vars(parser.parse_args())
@@ -107,19 +107,21 @@ def vox_generator_test(all_files):
     while 1:
         for file in all_files:
             p = file
-            if options['correction']:
-                flair = load_nii(os.path.join(path, file, file + '_flair_corrected.nii.gz')).get_data()
-                t2 = load_nii(os.path.join(path, file, file + '_t2_corrected.nii.gz')).get_data()
-                t1 = load_nii(os.path.join(path, file, file + '_t1_corrected.nii.gz')).get_data()
-                t1ce = load_nii(os.path.join(path, file, file + '_t1ce_corrected.nii.gz')).get_data()
-            else:
-                flair = load_nii(os.path.join(path, p, p + '_flair.nii.gz')).get_data()
-
-                t2 = load_nii(os.path.join(path, p, p + '_t2.nii.gz')).get_data()
-
-                t1 = load_nii(os.path.join(path, p, p + '_t1.nii.gz')).get_data()
-
-                t1ce = load_nii(os.path.join(path, p, p + '_t1ce.nii.gz')).get_data()
+            coll = glob.glob(os.path.join(path, file)+'/*')
+            for c in coll:
+                if 'flair.' in c or 'flair_corrected.' in c:
+                    flair_path = c
+                if 't1.' in c or 't1_corrected.' in c:
+                    t1_path = c 
+                if 't2.' in c or 't2_corrected.' in c:
+                    t2_path = c
+                if 't1ce.'in c or 't1ce_corrected.' in c:
+                    t1ce_path = c
+            flair = load_nii(flair_path).get_data()
+            t2 = load_nii(t2_path).get_data()
+            t1 = load_nii(t1_path).get_data()
+            t1ce = load_nii(t1ce_path).get_data()
+            
             data = np.array([flair, t2, t1, t1ce])
             data = np.transpose(data, axes=[1, 2, 3, 0])
 
